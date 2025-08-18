@@ -1,0 +1,331 @@
+#!/bin/bash
+normal=`echo "\033[m"`
+menu=`echo "\033[36m"` #blue
+number=`echo "\033[33m"` #yellow
+bgred=`echo "\033[41m"`
+fgred=`echo "\033[31m"`
+green=`echo "\e[92m"`
+bold=`echo "\e[1m"`
+
+terminal=/dev/pts/0
+columns=$(stty -a <"$terminal" | grep -Po '(?<=columns )\d+')
+rows=$(stty -a <"$terminal" | grep -Po '(?<=rows )\d+')
+f2=" %-18s"
+timeout=2
+
+loginwbm() {
+    if [ "$2" == "Linux" ]; then
+        res=$(curl -m "$timeout" -s -k -w "%{http_code}" --request POST --url https://"$1"/wbm/php/authentication/login.php --data '{"username": "'$3'", "password": "'$4'"}')
+        http_code=${res: -3}   # get the last 3 digits
+        if [ $http_code -eq 200 ]; then
+            echo default
+        else
+            echo ok
+        fi
+    elif [ "$2" == "LinuxFW22" ]; then
+        res=$(curl -m "$timeout" -s -k -w "%{http_code}" --request GET --url https://"$1"/wda/devices/0-0 --header 'Authorization: Basic YWRtaW46d2Fnbw==') #| jq '.data.attributes.value' | cut -d'"' -f2
+        http_code=${res: -3}   # get the last 3 digits
+        if [ $http_code -eq 200 ]; then
+            echo default
+        else
+            echo ok
+        fi
+    elif [ "$2" == "G3" ]; then
+        res=$(curl -m "$timeout" -s -k -w "%{http_code}" --request GET --url http://"$1"/webserv/cplcfg/ethernet.ssi --header 'Authorization: Basic YWRtaW46d2Fnbw==')
+        http_code=${res: -3}   # get the last 3 digits
+        if [ $http_code -eq 200 ]; then
+            echo default
+        else
+            echo ok
+        fi
+    elif [ "$2" == "G4" ]; then
+        res=$(curl -m "$timeout" -s -k -w "%{http_code}" --request GET --url http://"$1"/wbm/cplcfg/ethernet.ssi --header 'Authorization: Basic YWRtaW46d2Fnbw==')
+        http_code=${res: -3}   # get the last 3 digits
+        if [ $http_code -eq 200 ]; then
+            echo default
+        else
+            echo ok
+        fi
+    else
+        echo NC
+    fi
+}
+
+getWDAparameter() {
+    res=$(curl -m "$timeout" -s -k -w "%{http_code}" --request GET --url https://"$1"/wda/parameters/"$2" --header 'Authorization: Basic YWRtaW46d2Fnbw==')
+    http_code=${res: -3}   # get the last 3 digits
+    content=$(echo ${res} | head -c-4)   # get all but the last line which contains the status code
+    if [ $http_code -eq 200 ]; then
+        echo $content | jq '.data.attributes.value' | cut -d'"' -f2
+    else
+        echo failed
+    fi
+}
+
+getWDAorder() {
+    res=$(curl -m "$timeout" -s -k -w "%{http_code}" --request GET --url https://"$1"/wda/devices/0-0 )
+    http_code=${res: -3}   # get the last 3 digits
+    content=$(echo ${res} | head -c-4)   # get all but the last line which contains the status code
+    if [ $http_code -eq 200 ]; then
+        echo $content | jq '.data.attributes.orderNumber' | cut -d'"' -f2
+    else
+        echo failed
+    fi
+}
+
+getWDAfirmware() {
+    res=$(curl -m "$timeout" -s -k -w "%{http_code}" --request GET --url https://"$1"/wda/devices/0-0 )
+    http_code=${res: -3}   # get the last 3 digits
+    content=$(echo ${res} | head -c-4 | jq '.data.attributes.firmwareVersion' | cut -d'"' -f2 )   # get all but the last line which contains the status code
+    if [ $http_code -eq 200 ]; then
+        if [[ $(cat fwversion | grep "$content") ]]; then
+            echo  $(cat fwversion | grep "$content")
+        else
+            echo $content
+        fi
+    else
+        echo failed
+    fi
+}
+
+main () {
+    clear
+	printf "${normal}${bold}WAGO Asset Tracking and Cybersecurity Health Scanner started\n"
+	if [ "$2" == "basic" ] || [ "$2" == "scan" ] || [ "$2" == "full" ] || [ "$2" == "auth" ]; then
+		printf "${normal}Mode selected : $2\n"
+	else
+		printf "${normal}Unknown mode selected : $2 \n" 
+		exit
+	fi
+	printf "${normal}${bold}Scanning network...\n"
+    printf "${normal}%*s\n" "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+    printf "${normal}$f2$f2\n" "IP Address" "MAC Address"
+    printf "${normal}%*s\n" "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+
+
+    res=$(nmap "$1" -sn > /tmp/result)
+    awk '/Nmap scan/{ip=$NF;next}ip && /MAC/{print ip, $3}' /tmp/result  > /tmp/host
+    rm -f /tmp/wagohost
+
+    while read p; do
+        ip=$(echo "$p"| cut -d' ' -f1)
+        mac=$(echo "$p"| cut -d' ' -f2)
+        if [ "${mac:0:8}" == "00:30:DE" ]; then
+            printf "${green}$f2$f2\n${normal}" "$ip" "$mac"
+            echo "$p" >> /tmp/wagohost
+        else
+            printf "${menu}$f2$f2\n${normal}" "$ip" "$mac"
+        fi
+    done </tmp/host
+
+    scan $1 $2
+}
+
+scan () {
+    printf "\n"
+    printf "${normal}${bold}Collecting data of WAGO products...\n"
+    printf "${normal}%*s\n" "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+    printf "${normal}$f2$f2$f2$f2$f2$f2$f2$f2$f2$f2\n" "IP Address" "MAC Address" "Hostname" "Part number" "Firmware" "SSH:root" "SSH:admin" "SSH:user" "WBM:admin"
+    printf "${normal}%*s\n" "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+
+    declare -A devices
+    nbdevices=1
+
+    while read p; do
+        ip=$(echo "$p"| cut -d' ' -f1)
+        mac=$(echo "$p"| cut -d' ' -f2)
+        order="?"
+        platform="?"
+        fw="?"
+        hostname="?"
+
+        res=$(curl -m "$timeout" -s -k https://"$ip"/wbm/php/parameter/configtools.php --data '{"aDeviceParams":[{"name":"get_coupler_details","parameter":["order-number"],"multiline":false}],"csrfToken":false,"renewSession":true}' | cut -d, -f3 | cut -d: -f2 | cut -d'"' -f2 | sed 's/\\//g' )
+
+        if [ "${res:0:3}" == "750" ] || [ "${res:0:3}" == "751" ] || [ "${res:0:3}" == "752" ] || [ "${res:0:3}" == "762" ]; then
+            platform="Linux"
+            order=$res
+        fi
+
+        res=$(curl -m "$timeout" -s -k https://"$ip"/wbm/php/parameter/login_data.php | cut -d: -f2 | cut -d " " -f2)
+        if [ "${res:0:3}" == "750" ] || [ "${res:0:3}" == "751" ] || [ "${res:0:3}" == "752" ] || [ "${res:0:3}" == "762" ]; then
+            platform="LinuxFW22"
+            order=$res
+        fi
+
+        res=$(curl -m "$timeout" -s -k https://"$ip"/wbm/php/parameter/login_data.php | cut -d: -f2 | cut -d " " -f3)
+        if [ "${res:0:4}" == "PIO3" ]; then
+            platform="LinuxFW22"
+            order="752-8303/8000-002"
+        fi
+
+        res=$(curl -m "$timeout" -s -k https://"$ip"/wbm/php/parameter/login_data.php | cut -d: -f2 | cut -d\" -f2)
+        if [ "${res:0:6}" == "TP 600" ]; then 
+            platform="LinuxFW22"
+            order="762-XXXX"
+        fi
+        
+        res=$(curl -m "$timeout" -s -k https://"$ip"/wbm/php/parameter/login_data.php | cut -d: -f2 | cut -d\" -f2)
+        if [ "${res:0:6}" == "WP 400" ]; then 
+            platform="LinuxFW22"
+            order="762-XXXX"
+        fi
+
+        res=$(curl -m "$timeout" -s -k https://"$ip"/login.htm | grep "<title>" | cut -c 8-15)
+        if [ "${res:0:3}" == "852" ]; then
+            platform="FMS"
+            order=$res
+        fi
+
+        res=$(curl -m "$timeout" -s -k http://"$ip"/wbm/cplcfg/state.ssi --output - | grep -a 'Order number' -A 1 | sed -n 2p | cut -c 15-21)
+        if [ "${res:0:3}" == "750" ]; then
+            platform="G4"
+            order=$res
+        fi
+
+        res=$(curl -m "$timeout" -s -k http://"$ip"/webserv/cplcfg/state.ssi --output - | grep -a 'Order number' -A 1 | sed -n 2p | cut -c 16-22)
+        if [ "${res:0:3}" == "750" ]; then
+            platform="G3"
+            order=$res
+        fi
+
+        res=$(curl -m "$timeout" -s -k http://"$ip"/GeneralinformationSection_ModuleinformationForm_Values.json | cut -d, -f1 | cut -d: -f2 | cut -d'"' -f2)
+        if [ "${res:0:4}" == "2789" ]; then
+            res2=$(curl -m "$timeout" -s -k http://"$ip"/GeneralinformationSection_ModuleinformationForm_Values.json | cut -d, -f2 | cut -d: -f2 | cut -d'"' -f2)
+            platform="PSU"
+            order="$res-$res2"
+        fi
+
+        res=$(curl -s -k https://"$ip"/learning_lldp_neighbor.js | grep local_product_name | cut -d= -f2 | tr -d " ;" | sed s/"'"/""/g)
+        if [ "${res:0:6}" == "852-18" ]; then
+            platform="LMS"
+            order=$res
+        fi
+        
+        res=$(curl -m "$timeout" -s -k https://"$ip"/login.htm | grep "<title>" | cut -c 8-15)
+        if [ "${res:0:4}" == "852-" ]; then
+            platform="FMS"
+            order=$res
+        fi
+
+        res=$(curl -m "$timeout" -s -k https://"$ip":9090 |  grep environment | cut -d\" -f12)
+        if [ "${res:0:4}" == "edge" ]; then
+            platform="Edge computer"
+            order="752-9XXX"
+        fi
+
+        if [ "$platform" == "Linux" ]; then
+            fw=$(curl -m "$timeout" -s -k https://"$ip"/wbm/php/parameter/configtools.php --data '{"aDeviceParams":[{"name":"get_coupler_details","parameter":["firmware-revision"],"multiline":false}],"csrfToken":false,"renewSession":true}' | cut -d, -f3 | cut -d: -f2 | cut -d'"' -f2 )
+        elif [ "$platform" == "G3" ]; then
+            fw=$(curl -m "$timeout" -s -k http://"$ip"/webserv/cplcfg/state.ssi --output - | grep -a 'Firmware revision' -A 1 | sed -n 2p | cut -c 16-28 | tr -d ' ' | tr -d '\0')
+        elif [ "$platform" == "G4" ]; then
+            fw=$(curl -m "$timeout" -s -k http://"$ip"/wbm/cplcfg/state.ssi --output - | grep -a 'Firmware revision' -A 1 | sed -n 2p | cut -c 15-26 | tr -d ' ' | tr -d '\0')
+        elif [ "$platform" == "PSU" ]; then
+            fw1=$(curl -m "$timeout" -s -k http://"$ip"/GeneralinformationSection_ModuleinformationForm_Values.json | cut -d, -f3 | cut -d: -f2 | cut -d'"' -f2)
+            fw2=$(curl -m "$timeout" -s -k http://"$ip"/GeneralinformationSection_ModuleinformationForm_Values.json | cut -d, -f4 | cut -d: -f2 | cut -d'"' -f2)
+            fw3=$(curl -m "$timeout" -s -k http://"$ip"/GeneralinformationSection_ModuleinformationForm_Values.json | cut -d, -f5 | cut -d: -f2 | cut -d'"' -f2)
+            fw="$fw1.$fw2.$fw3"
+        fi
+
+        if [ "$platform" == "Linux" ]; then
+            hostname=$(curl -m "$timeout" -s -k https://"$ip"/wbm/php/parameter/configtools.php --data '{"aDeviceParams":[{"name":"get_coupler_details","parameter":["actual-hostname"],"multiline":false}],"csrfToken":false,"renewSession":true}' | cut -d, -f3 | cut -d: -f2 | cut -d'"' -f2 )
+        elif [ "$platform" == "LinuxFW22" ]; then
+            hostname=$(curl -m "$timeout" -s -k https://"$ip"/wbm/php/parameter/login_data.php | cut -d, -f2| cut -d: -f2 | cut -d'"' -f2)
+            order=$(getWDAorder "$ip")
+            fw=$(getWDAfirmware "$ip")
+        elif [ "$platform" == "G4" ]; then
+            hostname=$(curl -m "$timeout" -s -k http://"$ip"/wbm/cplcfg/state.ssi --output - | grep -a 'Host name' -A 1 | sed -n 2p | cut -c 15-26)
+        elif [ "$platform" == "G3" ]; then
+            hostname=$(curl -m "$timeout" -s -k http://"$ip"/webserv/cplcfg/state.ssi --output - | grep -a 'Host Name' -A 1 | sed -n 2p | cut -c 16-28)
+        fi
+
+        if [ "$2" == "scan" ] || [ "$2" == "full" ]; then
+            result=$(./wagoscanport.sh "$ip" | head -c-1)
+            devices[$nbdevices,6]=$result
+        fi
+
+        if [ "$2" == "auth" ] || [ "$2" == "full" ]; then
+            if [ "$platform" == "Linux" ] || [ "$platform" == "LinuxFW22" ]; then
+                devices[$nbdevices,7]=$(./wagossh.sh "$ip" root wago)
+                devices[$nbdevices,8]=$(./wagossh.sh "$ip" admin wago)
+                devices[$nbdevices,9]=$(./wagossh.sh "$ip" user user)
+            else
+                devices[$nbdevices,7]='NC'
+                devices[$nbdevices,8]='NC'
+                devices[$nbdevices,9]='NC'
+            fi
+            devices[$nbdevices,10]=$(loginwbm "$ip" "$platform" admin wago)
+        fi
+
+        devices[$nbdevices,1]=$ip
+        devices[$nbdevices,2]=$mac
+        devices[$nbdevices,3]=$hostname
+        devices[$nbdevices,4]=$order
+        devices[$nbdevices,5]=$fw
+
+        for ((j=1;j<6;j++)) do
+            printf "${normal}$f2" "${devices[$nbdevices,$j]}"
+        done
+
+        if [ "$2" == "auth" ] || [ "$2" == "full" ]; then
+            for ((j=7;j<=10;j++)) do
+                if [[ ${devices[$nbdevices,$j]} == "default" ]]; then
+                    printf "${fgred}$f2${normal}" "!";
+                elif [[ ${devices[$nbdevices,$j]} == "ok" ]]; then
+                    printf "${green}$f2${normal}" "ok";
+                elif [[ ${devices[$nbdevices,$j]} == "NC" ]]; then
+                    printf "${normal}$f2${normal}" "-";
+                fi
+            done
+        fi
+
+        nbdevices=$((nbdevices+1))
+        printf "\n"
+    done </tmp/wagohost
+
+    echo "ip address;mac-address;hostname;part-number;fw;ftp(20);ftp(21);ssh(22);telnet(23);dns(53);http(80);61850(102);https(443);modbus(502);60870(2404);cds2(2455);opc ua(4840);iocheck(6626);webvisu(8080);cds3(11740);dnp3(20000);bacnet(47808);dns(53);dhcp(67);tftp(69);snmp(161);snmp(162);ipsec(500);modbus(502);syslog(514);openvpn(1194);cds3(1740);60870(2404);ipsec(4500);dnp3(2000);bacnet(47808);admin;root;admin;user" > .tmpresult
+
+    for ((i=1;i<nbdevices;i++)) do
+        for ((j=1;j<10;j++)) do
+            echo -n "${devices[$i,$j]};" >> .tmpresult
+        done
+        echo "${devices[$i,10]}" >> .tmpresult
+    done
+
+    mv .tmpresult "$(pwd)/reports/watchscan_$(date +"%Y_%m_%d_%I_%M").csv"
+    printf "\n"
+	printf "${normal}${bold}Report generated in $(pwd)/reports/watchscan_$(date +"%Y_%m_%d_%I_%M").csv\n${normal}"
+}
+
+
+usage="$(basename "$0") [-h]  [-t target] [-m mode] -- Scanner to gather useful information and weaknesses on WAGO products
+
+where:
+    -h show this help text
+    -t target : hostname, IP addresses or network : 192.168.1.0/24, 192.168.1.17, 192.168.1.1-254
+    -m mode ( basic : basic information gathering based on web scraping
+              scan : scan for open ports (result in CSV file)
+              auth : check for default credential (SSH and WBM) for supported platform
+			  full : all of it "
+
+while getopts "ht:m:" opt; do
+  case $opt in
+    h) echo "$usage"
+       exit 0
+    ;;
+    t) target="$OPTARG"
+    ;;
+	m) mode="$OPTARG"
+    ;;
+    \?) echo "Invalid option -$OPTARG" >&2
+    exit 1
+    ;;
+  esac
+
+  case $OPTARG in
+    -*) echo "Option $opt needs a valid argument"
+    exit 1
+    ;;
+  esac
+done
+
+main $target $mode
