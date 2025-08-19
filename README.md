@@ -74,3 +74,13 @@ Example :
 | 762-34XX  | Web Panel 400 | Supported |
 | 2789-9052  | PRO 2 communication module | Supported |
 | 852-XXXX  | Managed switches | Not yet supported |
+
+
+
+# Disclaimer
+
+This tool is intended solely for legitimate and authorized use in conducting asset inventory and verifying cybersecurity measures on WAGO products within a network. Users are required to obtain proper authorization from network owners or administrators before use.
+
+The developer of this program assumes no responsibility for any unauthorized use or any consequences arising from the improper application of this tool. By using this tool, you agree that you have the necessary permissions and you assume all liability associated with its use. Please ensure compliance with all applicable laws and regulations regarding network scanning and cybersecurity practices.
+
+This tool is provided "as is" without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and non-infringement. In no event shall the developer be liable for any claim, damages, or other liability, whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the tool or the use or other dealings in the tool.
