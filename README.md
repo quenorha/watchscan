@@ -77,7 +77,7 @@ Example :
 
 
 
-# Disclaimer
+## Disclaimer
 
 This tool is intended solely for legitimate and authorized use in conducting asset inventory and verifying cybersecurity measures on WAGO products within a network. Users are required to obtain proper authorization from network owners or administrators before use.
 
